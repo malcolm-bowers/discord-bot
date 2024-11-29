@@ -5,39 +5,39 @@ from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 INTRO_CHANNEL_ID = int(os.getenv("INTRO_CHANNEL_ID"))
-REMINDER_ROLE_NAME = os.getenv("REMINDER_ROLE_NAME")
+INTRO_ROLE = os.getenv("INTRO_ROLE")
+MEMBER_ROLE = os.getenv("MEMBER_ROLE")
 REMINDER_CHANNEL_ID = int(os.getenv("REMINDER_CHANNEL_ID"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 GUILD_ID = int(os.getenv("GUILD_ID"))
 REMINDER_DELAY = int(os.getenv("REMINDER_DELAY", 3))
-KICK_DELAY = int(os.getenv("KICK_DELAY", 7)) 
+KICK_DELAY = int(os.getenv("KICK_DELAY", 7))
 
 intents = discord.Intents.default()
 intents.messages = True
 intents.guilds = True
 intents.members = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
 user_intro_tracker = {}
 
-
+# Function to log actions
 async def log_action(guild, message):
-    """Log messages to the logging channel."""
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
     if log_channel and log_channel.permissions_for(guild.me).send_messages:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         await log_channel.send(f"[{timestamp}] {message}")
     else:
-        print(f"Logging channel is unavailable or the bot lacks permissions.")
+        print(f"Logging failed: {message}")
 
-
+# Function to send reminders
 async def send_reminder(member, guild):
-    """Send a reminder to the user."""
     try:
         await member.send(
             "Hi! You haven't completed your introduction in the server. Please post your intro in the introductions channel to avoid being removed."
@@ -53,54 +53,115 @@ async def send_reminder(member, guild):
         else:
             await log_action(guild, f"Failed to send reminder to {member.mention}: No access to DMs or reminder channel.")
     except Exception as e:
-        await log_action(guild, f"An error occurred while trying to send a reminder to {member.mention}: {e}")
-        print(f"Failed to send reminder to {member.name}: {e}")
+        await log_action(guild, f"Error sending reminder to {member.mention}: {e}")
 
-
+# Event: Bot is ready
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     for guild in bot.guilds:
         print(f"Connected to guild: {guild.name} (ID: {guild.id})")
+        print("Available roles:")
+        for role in guild.roles:
+            print(f"- {role.name}")
     if not check_intro_status.is_running():
         check_intro_status.start()
 
-
+# Event: Member joins the server
 @bot.event
 async def on_member_join(member):
     guild = member.guild
-    intro_role = discord.utils.get(guild.roles, name=REMINDER_ROLE_NAME)
+    intro_role = discord.utils.get(guild.roles, name=INTRO_ROLE)
+
     if intro_role:
-        await member.add_roles(intro_role)
-        user_intro_tracker[member.id] = datetime.now()
-        await log_action(guild, f"{member.mention} has joined the server and was assigned the role '{REMINDER_ROLE_NAME}'.")
+        try:
+            await member.add_roles(intro_role)
+            user_intro_tracker[member.id] = datetime.now()
+            await log_action(
+                guild,
+                f"{member.mention} has joined the server and was assigned the role '{intro_role.name}'."
+            )
+        except discord.Forbidden:
+            await log_action(
+                guild,
+                f"Failed to assign role '{intro_role.name}' to {member.mention}: Bot lacks permission."
+            )
+        except Exception as e:
+            await log_action(
+                guild,
+                f"Error assigning role '{intro_role.name}' to {member.mention}: {e}"
+            )
+    else:
+        await log_action(
+            guild,
+            f"{member.mention} has joined the server, but the role '{INTRO_ROLE}' was not found."
+        )
 
+# Command: Assign a role to a member
+@bot.command()
+async def assign_role(ctx, member: discord.Member, role_name: str):
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if not role:
+        await ctx.send(f"Role '{role_name}' not found.")
+        return
 
+    try:
+        await member.add_roles(role)
+        await ctx.send(f"Assigned role '{role_name}' to {member.mention}.")
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to manage this role.")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {e}")
+
+# Command: Ping
+@bot.command()
+async def ping(ctx):
+    await ctx.send("Pong!")
+
+# Event: Member leaves the server
 @bot.event
 async def on_member_remove(member):
     guild = member.guild
-    user_intro_tracker.pop(member.id, None)  # Clean up tracker
+    user_intro_tracker.pop(member.id, None)
     await log_action(guild, f"{member.mention} has left or was kicked from the server.")
 
-
+# Event: Message in the introduction channel
 @bot.event
 async def on_message(message):
     if message.channel.id == INTRO_CHANNEL_ID and not message.author.bot:
         guild = message.guild
-        member_role = discord.utils.get(guild.roles, name="Member")
-        intro_role = discord.utils.get(guild.roles, name="Needs Introduction")
+        member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE)
+        intro_role = discord.utils.get(guild.roles, name=INTRO_ROLE)
+
         if intro_role and intro_role in message.author.roles:
-            await message.author.remove_roles(intro_role)
-            await message.author.add_roles(member_role)
-            await log_action(guild, f"Assigned 'Member' role to {message.author.mention} after completing introduction.")
-        user_intro_tracker.pop(message.author.id, None)
-        await log_action(guild, f"{message.author.mention} has completed their introduction.")
+            try:
+                await message.author.remove_roles(intro_role)
+                await message.author.add_roles(member_role)
+                await log_action(
+                    guild,
+                    f"Assigned 'Member' role to {message.author.mention} after completing introduction."
+                )
+                user_intro_tracker.pop(message.author.id, None)
+            except discord.Forbidden:
+                await log_action(
+                    guild,
+                    f"Failed to update roles for {message.author.mention}: Bot lacks permission."
+                )
+            except Exception as e:
+                await log_action(
+                    guild,
+                    f"Error updating roles for {message.author.mention}: {e}"
+                )
+        else:
+            await log_action(
+                guild,
+                f"{message.author.mention} tried to complete introduction but has no '{INTRO_ROLE}'."
+            )
     await bot.process_commands(message)
 
-
+# Task: Check intro status periodically
 @tasks.loop(hours=24)
 async def check_intro_status():
-    """Check for members who haven’t completed their introduction."""
     current_time = datetime.now()
     guild = bot.get_guild(GUILD_ID)
 
@@ -126,14 +187,11 @@ async def check_intro_status():
                 user_intro_tracker.pop(user_id, None)
             except discord.Forbidden:
                 await log_action(guild, f"Failed to kick {member.mention}: Bot lacks permissions.")
-                print(f"Failed to kick {member.name}: Insufficient permissions.")
             except Exception as e:
-                await log_action(guild, f"An error occurred while trying to kick {member.mention}: {e}")
-                print(f"Failed to kick {member.name}: {e}")
+                await log_action(guild, f"Error kicking {member.mention}: {e}")
 
         elif current_time - join_time > timedelta(days=REMINDER_DELAY):
             await send_reminder(member, guild)
-
 
 # Run the bot
 bot.run(TOKEN)
