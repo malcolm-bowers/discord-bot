@@ -82,7 +82,7 @@ async def check_inactive_members():
         return
     
     print(f"Checking inactive members in guild: {guild.name}")
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     one_month_ago = now - timedelta(days=30)
 
     for member in guild.members:
