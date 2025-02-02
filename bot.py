@@ -64,64 +64,6 @@ async def on_ready():
         print("Available roles:")
         for role in guild.roles:
             print(f"- {role.name}")
-    if not check_intro_status.is_running():
-        check_intro_status.start()
-    if not check_inactive_members.is_running():
-        check_inactive_members.start()
-
-@tasks.loop(hours=24)
-async def check_inactive_members():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        print("Guild not found!")
-        return
-    
-    log_channel=guild.get_channel(LOG_CHANNEL_ID)
-    if not log_channel:
-        print(f"Log channel not found.")
-        return
-    
-    print(f"Checking inactive members in guild: {guild.name}")
-    now = datetime.now(timezone.utc)
-    one_month_ago = now - timedelta(days=30)
-
-    for member in guild.members:
-        if member.bot:  # Skip bots
-            continue
-
-        # Get the member's last message time
-        last_message_time = await get_last_message_time(member, guild)
-        if not last_message_time or last_message_time < one_month_ago:
-            try:
-                await member.kick(reason="Inactive for 30 days")
-                await log_channel.send(
-                    f"🔨 {member.mention} has been kicked for being inactive for over 30 days."
-                )
-                print(f"Kicked {member.name} for inactivity")
-            except discord.Forbidden:
-                await log_channel.send(
-                    f"❌ Failed to kick {member.mention}. Missing permissions."
-                )
-                print(f"Cannot kick {member.name}. Missing permissions.")
-            except discord.HTTPException as e:
-                await log_channel.send(
-                    f"❌ Failed to kick {member.mention} due to an error: {e}"
-                )
-                print(f"Failed to kick {member.name}: {e}")
-
-async def get_last_message_time(member, guild):
-    # Get the last message time for a member from message history
-    try:
-        # Search all text channels for the member's last message
-        for channel in guild.text_channels:
-            if not channel.permissions_for(guild.me).read_message_history:
-                continue  # Skip channels where the bot can't read history
-            async for message in channel.history(limit=100):
-                if message.author == member:
-                    return message.created_at
-    except Exception as e:
-        print(f"Error fetching last message time for {member.name}: {e}")
-    return None
 
 # Event: Member joins the server
 @bot.event
